@@ -1,0 +1,33 @@
+# Core dependencies
+langchain==0.2.3
+langchain_community==0.2.4
+unstructured[all-docs]==0.16.2
+sentence-transformers==3.2.1
+huggingface_hub>=0.19.0
+pinecone-text==0.9.0
+qdrant-client==1.12.0
+rerankers==0.4.0
+openai==1.52.2
+anthropic==0.37.1
+# instructor==1.6.3
+
+# Document processing
+# python-magic==0.4.27
+python-magic-bin==0.4.14; sys_platform == 'win32'
+pdf2image==1.16.3
+pytesseract==0.3.10
+pdfminer.six==20221105
+opencv-python==4.10.0.84
+pandas==2.2.3
+
+# Async support
+aiohttp==3.9.1
+async-timeout==4.0.3
+asyncio==3.4.3
+
+# Utilities
+pydantic==2.9.2
+structlog==24.1.0
+ratelimit==2.2.1
+psutil==5.9.5
+tqdm==4.66.1

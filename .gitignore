@@ -1,0 +1,15 @@
+__pycache__
+.pytest_cache
+.benchmarks
+.venv
+.streamlit/secrets.toml
+.streamlit/secrets.toml.bak
+tests
+db
+database
+src/pipeline/examples
+config.yaml
+bm25_params.json
+test_template.md
+*.pyc
+*.pyo

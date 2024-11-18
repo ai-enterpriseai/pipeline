@@ -1,0 +1,61 @@
+[project]
+name = "pipeline"
+version = "0.1.0"
+description = "RAG Pipeline Implementation"
+authors = [
+    { name = "Denys Holovatyi", email = "dh@osnova.services" }
+]
+requires-python = ">=3.8"
+dependencies = [
+    "langchain==0.2.3",
+    "langchain_community==0.2.4",
+    "unstructured[all-docs]==0.16.2",
+    "sentence-transformers==3.2.1",
+    "pinecone-text==0.9.0",
+    "qdrant-client==1.12.0",
+    "huggingface_hub>=0.19.0",
+    "rerankers==0.4.0",
+    "openai==1.52.2",
+    "anthropic==0.37.1",
+    # "instructor==1.6.3",
+    "python-magic-bin==0.4.14; sys_platform == 'win32'",
+    "pdf2image==1.16.3",
+    "pytesseract==0.3.10",
+    "pdfminer.six==20221105",
+    "opencv-python==4.10.0.84",
+    "pandas==2.2.3",
+    "aiohttp==3.9.1",
+    "async-timeout==4.0.3",
+    "asyncio==3.4.3",
+    "pydantic==2.9.2",
+    "structlog==24.1.0",
+    "ratelimit==2.2.1",
+    "psutil==5.9.5",
+    "tqdm==4.66.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+packages = ["src"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/pipeline" = "pipeline"
+
+[project.optional-dependencies]
+dev = [
+    "pytest==7.4.3",
+    "pytest-asyncio==0.21.1",
+    "pytest-cov==4.1.0",
+    "pytest-watch==4.2.0",
+    "pytest-benchmark==4.0.0",
+    "pytest-html==4.1.1",
+    "tox==4.11.3",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
