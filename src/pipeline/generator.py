@@ -1,8 +1,3 @@
-"""
-generator.py
------------
-Enhanced generation module with advanced features.
-"""
 from typing import List, Dict, Any, Optional, Union, AsyncGenerator
 from enum import Enum
 
