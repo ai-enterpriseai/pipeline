@@ -241,11 +241,11 @@ class Indexer:
                     embedding_timestamp=datetime.now(),
                     chunk_text=chunk
                 )
-                
+
                 point = models.PointStruct(
                     id=str(uuid.uuid4()),
                     vector={
-                        "dense": dense_vectors[i].tolist(),
+                        "dense": dense_vectors[i],#.tolist(),
                         "sparse": models.SparseVector(
                             indices=sparse_vectors[i]["indices"],
                             values=sparse_vectors[i]["values"]
@@ -326,6 +326,8 @@ class Indexer:
                 doc_dense = await self.dense_embedder.embed(doc_chunks)
                 doc_sparse = await self.sparse_embedder.embed(doc_chunks)
                 
+                # logger.info(doc_dense)
+
                 points = await self._prepare_vectors(doc, doc_dense, doc_sparse)
                 batch.extend(points)
                 

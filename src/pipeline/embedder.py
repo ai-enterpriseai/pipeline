@@ -61,7 +61,7 @@ class DenseEmbedder(BaseEmbedder):
         super().__init__(config)
         self.model = self._load_model()
         
-    def _load_model(self) -> SentenceTransformer:
+    def _load_model1(self) -> SentenceTransformer:
         """
         Load the dense embedding model.
         
@@ -83,7 +83,7 @@ class DenseEmbedder(BaseEmbedder):
             logger.error(f"Failed to load dense model: {e}")
             raise RuntimeError(f"Failed to load dense model: {e}")
 
-    async def embed(self, texts: List[str]) -> torch.Tensor:
+    async def embed1(self, texts: List[str]) -> torch.Tensor:
         """
         Generate dense embeddings.
         
@@ -104,14 +104,60 @@ class DenseEmbedder(BaseEmbedder):
                 batch_size=self.config.batch_size,
                 normalize_embeddings=self.config.normalize_embeddings,
                 show_progress_bar=True,
-                convert_to_tensor=True
+                # convert_to_tensor=True
             )
             logger.info("Dense embedding complete.")
-            return embeddings
+            return embeddings#.tolist()
         except Exception as e:
             logger.error(f"Dense embedding failed: {e}")
             raise RuntimeError(f"Dense embedding failed: {e}")
 
+    def _load_model(self): # TODO -> openai embedding 
+        """
+        Load the dense embedding model.
+        
+        Returns:
+            Loaded model
+            
+        Raises:
+            RuntimeError: If model loading fails
+        """
+        try:
+            # logger.info(f"Loading dense model: {self.config.dense_model_name}")
+            from openai import OpenAI
+            client = OpenAI()
+
+            model = client.embeddings
+            return model 
+        except Exception as e:
+            logger.error(f"Failed to load dense model: {e}")
+            raise RuntimeError(f"Failed to load dense model: {e}")
+
+    async def embed(self, texts: List[str]) -> torch.Tensor:
+        """
+        Generate dense embeddings.
+        
+        Args:
+            texts: List of texts to embed
+            
+        Returns:
+            Tensor of embeddings
+            
+        Raises:
+            RuntimeError: If embedding generation fails
+        """
+        try:
+            # Use asyncio.to_thread for CPU-intensive operation
+            embeddings = await asyncio.to_thread(
+                self.model.create,
+                input=[t if t else " " for t in texts],
+                model="text-embedding-3-small",
+            )
+            logger.info("Dense embedding complete.")
+            return [e.embedding for e in embeddings.data]
+        except Exception as e:
+            logger.error(f"Dense embedding failed: {e}")
+            raise RuntimeError(f"Dense embedding failed: {e}")
 
 class SparseEmbedder(BaseEmbedder):
     """Handles sparse embeddings using BM25Encoder from pinecone-text."""

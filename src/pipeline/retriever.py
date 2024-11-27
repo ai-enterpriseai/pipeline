@@ -82,7 +82,9 @@ class Retriever:
     def _initialize_reranker(self) -> Reranker:
         """Initialize reranker model."""
         try:
-            return Reranker(self.config.reranker_model)
+            # return Reranker(self.config.reranker_model)
+            import cohere 
+            return cohere.Client("6MFrR61mga4BYc5CPxGQOIuRSgG48NZdFtUzrCnA")
         except Exception as e:
             logger.error(f"Failed to initialize reranker: {e}")
             raise RuntimeError(f"Reranker initialization failed: {e}")
@@ -132,7 +134,7 @@ class Retriever:
             # Prepare prefetch
             prefetch = [
                 models.Prefetch(
-                    query=dense_vector.tolist(),
+                    query=dense_vector,#.tolist(),
                     using="dense",
                     limit=self.config.top_k
                 )
@@ -166,7 +168,7 @@ class Retriever:
             logger.error(f"Search failed: {e}")
             raise RuntimeError(f"Search failed: {e}")
 
-    async def _rerank_results(
+    async def _rerank_results1(
         self,
         query: str,
         results: List[models.ScoredPoint]
@@ -209,6 +211,57 @@ class Retriever:
             logger.error(f"Reranking failed: {e}")
             raise RuntimeError(f"Reranking failed: {e}")
 
+    async def _rerank_results(
+        self,
+        query: str,
+        results: List[models.ScoredPoint]
+    ) -> List[SearchResult]:
+        """Rerank search results."""
+        try:
+            # Prepare documents and metadata for reranking
+            docs = []
+            metadata = []
+            for r in results:
+                docs.append(r.payload.get('chunk_text', ''))
+                metadata.append(r.payload.get('metadata', {}))
+
+            # Perform reranking
+            reranked = await asyncio.to_thread(
+                self.reranker.rerank,
+                query=query,
+                documents=docs,
+                top_n=self.config.rerank_top_k,
+                model="rerank-multilingual-v3.0"
+            )
+            
+            # Sort results by relevance score
+            top_results = sorted(
+                reranked.results,
+                key=lambda x: x.relevance_score,
+                reverse=True
+            )[:self.config.rerank_top_k]
+            
+            # Convert to SearchResult objects
+            final_results = []
+            for r in top_results:
+                if r.index < len(results):
+                    original = results[r.index]
+                    final_results.append(
+                        SearchResult(
+                            text=original.payload.get('chunk_text', ''),
+                            score=r.relevance_score,
+                            metadata=original.payload.get('metadata', {}),
+                            original_rank=r.index,
+                            reranked_score=r.relevance_score
+                        )
+                    )
+            
+            return final_results
+                
+        except Exception as e:
+            logger.error(f"Reranking failed: {e}")
+            raise RuntimeError(f"Reranking failed: {e}")
+        
     async def retrieve(
         self,
         query: str,
