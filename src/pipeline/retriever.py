@@ -83,15 +83,15 @@ class Retriever:
     def _initialize_reranker(self) -> Union[Reranker, cohere.AsyncClientV2]:
         """Initialize reranker model based on configuration."""
         try:
-            if self.config.retriever.reranker.reranker_type == RerankerType.RERANKER:
-                logger.info(f"Loading cross-encoder model: {self.config.retriever.reranker.model_name}")
-                return Reranker(self.config.retriever.reranker.model_name)
+            if self.config.reranker.reranker_type == RerankerType.RERANKER:
+                logger.info(f"Loading cross-encoder model: {self.config.reranker.reranker_model_name}")
+                return Reranker(self.config.reranker.reranker_model_name)
             
-            elif self.config.retriever.reranker.reranker_type == RerankerType.COHERE:
-                if not self.config.retriever.reranker.api_key:
+            elif self.config.reranker.reranker_type == RerankerType.COHERE:
+                if not self.config.reranker.api_key:
                     raise ValueError("API key required for Cohere reranker")
                 logger.info("Initializing Cohere client")
-                return cohere.AsyncClientV2(self.config.retriever.reranker.api_key)
+                return cohere.AsyncClientV2(self.config.reranker.api_key)
                 
         except Exception as e:
             logger.error(f"Failed to initialize reranker: {e}")
@@ -191,20 +191,19 @@ class Retriever:
                 metadata.append(r.payload.get('metadata', {}))
 
             # Perform reranking based on reranker type
-            if self.config.retriever.reranker.reranker_type == RerankerType.COHERE:
-                reranked = await asyncio.to_thread(
-                    self.reranker.rerank,
+            if self.config.reranker.reranker_type == RerankerType.COHERE:
+                reranked = await self.reranker.rerank(
                     query=query,
                     documents=docs,
-                    top_n=self.config.retriever.reranker.top_k,
-                    model=self.config.retriever.reranker.model_name
+                    top_n=self.config.reranker.top_k,
+                    model=self.config.reranker.reranker_model_name
                 )
                 # Process Cohere results
                 top_results = sorted(
                     reranked.results,
                     key=lambda x: x.relevance_score,
                     reverse=True
-                )[:self.config.retriever.reranker.top_k]
+                )[:self.config.reranker.top_k]
                 
                 return [
                     SearchResult(
@@ -219,11 +218,9 @@ class Retriever:
                 ]
             else:
                 # Handle other reranker types (rerankers lib)
-                reranked = await asyncio.to_thread(
-                    self.reranker.rank_async,
+                reranked = await self.reranker.rank_async(
                     query=query,
                     docs=docs,
-                    metadata=metadata
                 )
                 
                 return [
@@ -234,7 +231,7 @@ class Retriever:
                         original_rank=r.doc_id,
                         reranked_score=r.score
                     )
-                    for r in reranked.results[:self.config.retriever.reranker.top_k]
+                    for r in reranked.results[:self.config.reranker.top_k]
                 ]
                 
         except Exception as e:

@@ -91,7 +91,7 @@ class DenseEmbedder(BaseEmbedder):
             logger.error(f"Failed to load model: {e}")
             raise RuntimeError(f"Failed to load model: {e}")
 
-    async def embed1(self, texts: List[str]) -> torch.Tensor:
+    async def embed(self, texts: List[str]) -> torch.Tensor:
         """
         Generate dense embeddings.
         
@@ -117,14 +117,22 @@ class DenseEmbedder(BaseEmbedder):
                 return embeddings            
             elif self.config.embedder_type == EmbedderType.OPENAI:
                 # Handle empty strings for OpenAI
-                processed_texts = [t if t else " " for t in texts]
-                response = await asyncio.to_thread(
-                    self.model.create,
-                    input=processed_texts,
-                    model=self.config.dense_model_name
-                )
+                processed_texts = [t if t else "SKIP" for t in texts]
+                all_embeddings = []
+                
+                # Process in batches
+                for i in range(0, len(processed_texts), self.config.batch_size):
+                    batch = processed_texts[i:i + self.config.batch_size]
+                    response = await asyncio.to_thread(
+                        self.model.create,
+                        input=batch,
+                        model=self.config.dense_model_name
+                    )
+                    batch_embeddings = [e.embedding for e in response.data]
+                    all_embeddings.extend(batch_embeddings)
+                    
                 logger.info("OpenAI embedding complete")
-                return [e.embedding for e in response.data]
+                return all_embeddings        
         except Exception as e:
             logger.error(f"Dense embedding failed: {e}")
             raise RuntimeError(f"Dense embedding failed: {e}")

@@ -22,7 +22,7 @@ class ProcessorConfig(BaseModel):
     extract_metadata: bool = Field(default=True)
     generate_chunk_context: bool = Field(default=False)
     preprocessors: List[Any] = Field(default_factory=list)  # Changed from DocumentPreprocessor for testing
-    batch_size: int = Field(default=10, ge=1)
+    batch_size: int = Field(default=100, ge=1)
     
     # Rate limiting
     rate_limit: int = Field(default=1000, gt=0)
@@ -202,7 +202,7 @@ class IndexerConfig(BaseModel):
     )
     
     # Vector dimensions
-    dense_dim: int = Field(
+    dense_model_dimension: int = Field(
         default=768,  # Default for all-mpnet-base-v2
         description="Dimension of dense vectors"
     )
@@ -238,13 +238,18 @@ class CacheConfig(BaseModel):
     )
 
 class RerankerType(Enum):
-    RERANKER = "cross_encoder"
+    RERANKER = "reranker"
     COHERE = "cohere" 
     
     # Allow any string value while still maintaining enum for documentation
     @classmethod
-    def _missing_(cls, value: str) -> str:
-        return value
+    def _missing_(cls, value: str) -> 'RerankerType':
+        # Create a new pseudo-member
+        obj = cls._value2member_map_.get(value, None)
+        if obj is None:
+            # Create a new enum member with the value as both name and value
+            return cls(value) if value in [e.value for e in cls] else None
+        return obj
 
     @property
     def default_model(self) -> str:
@@ -263,7 +268,7 @@ class RerankerConfig(BaseModel):
         default=RerankerType.RERANKER,
         description="Type of reranker to use (cross_encoder/cohere)"
     )
-    model_name: str = Field(
+    reranker_model_name: str = Field(
         default=None,
         description="Model name or path"
     )    
@@ -280,7 +285,7 @@ class RerankerConfig(BaseModel):
         description="API key for Cohere"
     )
 
-    @field_validator('model_name')
+    @field_validator('reranker_model_name')
     def set_default_model(cls, v: Optional[str], info: ValidationInfo) -> str:
         if v is None:
             reranker_type = info.data.get('reranker_type', RerankerType.RERANKER)

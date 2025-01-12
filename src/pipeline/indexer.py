@@ -161,7 +161,7 @@ class Indexer:
                     collection_name=self.config.collection_name,
                     vectors_config={
                         "dense": models.VectorParams(
-                            size=self.config.dense_dim,
+                            size=self.config.dense_model_dimension,
                             distance=models.Distance.COSINE
                         )
                     },
