@@ -123,6 +123,12 @@ class EmbedderConfig(BaseModel):
         description="Maximum wait time between retries in seconds"
     )
 
+    @field_validator('sparse_model_path')
+    def convert_to_path(cls, v: Union[str, Path]) -> Path:
+        if isinstance(v, str):
+            return Path(v)
+        return v
+
     @field_validator('device')
     def validate_device(cls, v: str) -> str:
         if v not in ['cpu', 'cuda']:

@@ -208,6 +208,14 @@ class Processor:
         self, source: Union[str, Path, List[Union[str, Path]]]
     ) -> List[Document]:
         """Load documents from various sources."""
+        # Handle Streamlit UploadedFile
+        if hasattr(source, 'name'):  # Streamlit UploadedFile
+            try:
+                return await self._load_streamlit_file(source)
+            except Exception as e:
+                self.metrics.add_error(str(e))
+                raise
+
         source_path = Path(source) if isinstance(source, str) else source
 
         if isinstance(source_path, list):
@@ -226,6 +234,198 @@ class Processor:
         except Exception as e:
             self.metrics.add_error(str(e))
             raise
+
+    async def _load_file(self, path: Path) -> List[Document]:
+        """Load single file with rate limiting."""
+        if path.suffix[1:] not in self.config.allowed_extensions:
+            raise InvalidSourceError(f"Unsupported file type: {path.suffix}")
+
+        try:
+            async with timeout(self.config.operation_timeout):
+                # Apply rate limiting
+                while not await self._rate_limiter.acquire():
+                    await asyncio.sleep(1)
+
+                loader = UnstructuredFileLoader(str(path) if isinstance(path, Path) else path.file)
+                document = await asyncio.to_thread(loader.load)
+                self.metrics.update_loaded_documents()
+                return document
+
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"Loading file {path} timed out")
+        except Exception as e:
+            raise ProcessingError(f"Failed to load file {path}: {e}")
+
+    async def _load_streamlit_file(self, uploaded_file: Any) -> List[Document]:
+        """Load single file from Streamlit upload with rate limiting."""
+        file_suffix = Path(uploaded_file.name).suffix[1:]
+        
+        if file_suffix not in self.config.allowed_extensions:
+            raise InvalidSourceError(f"Unsupported file type: {file_suffix}")
+        
+        content = await asyncio.to_thread(uploaded_file.read)
+        content = content.decode('utf-8') if isinstance(content, bytes) else content
+
+        import tempfile
+        import os
+
+        temp_file = None
+        try:
+            async with timeout(self.config.operation_timeout):
+                # Apply rate limiting
+                while not await self._rate_limiter.acquire():
+                    await asyncio.sleep(1)
+
+                # Create temp file
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_suffix}')
+                temp_file.write(content.encode('utf-8') if isinstance(content, str) else content)
+                temp_file.flush()
+                temp_file.close()  # Close file handle explicitly
+                
+                # Load document
+                loader = UnstructuredFileLoader(temp_file.name)
+                document = await asyncio.to_thread(loader.load)
+                self.metrics.update_loaded_documents()
+                return document
+
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"Loading file {uploaded_file.name} timed out")
+        except Exception as e:
+            raise ProcessingError(f"Failed to load file {uploaded_file.name}: {e}")
+        finally:
+            # Clean up temp file
+            if temp_file is not None:
+                try:
+                    os.unlink(temp_file.name)
+                except Exception as e:
+                    logger.warning(f"Failed to delete temporary file: {e}")            
+
+    async def _load_directory(self, path: Path) -> List[Document]:
+        """Load directory of files with progress bar."""
+        try:
+            async with timeout(self.config.operation_timeout):
+                loader = DirectoryLoader(
+                    str(path),
+                    glob="**/*",
+                    loader_cls=UnstructuredFileLoader,
+                    use_multithreading=True, 
+                    silent_errors=True,
+                    show_progress=True,
+                )
+                documents = await asyncio.to_thread(loader.load)
+                self.metrics.update_loaded_documents(len(documents))
+                return documents
+
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"Loading directory {path} timed out")
+        except Exception as e:
+            raise ProcessingError(f"Failed to load directory {path}: {e}")
+
+    async def _load_multiple_sources(
+        self, sources: List[Union[str, Path]]
+    ) -> List[Document]:
+        """Load multiple sources concurrently."""
+        documents = []
+        async with asyncio.TaskGroup() as group:
+            tasks = [
+                group.create_task(self.load_documents(source)) 
+                for source in sources
+            ]
+
+        for task in tasks:
+            try:
+                docs = await task
+                documents.extend(docs)
+            except* Exception as e:
+                self.metrics.add_error(str(e))
+        
+        self.metrics.update_loaded_documents(len(documents))
+        return documents
+
+    async def _validate_document(self, document: Document) -> Tuple[bool, Optional[str]]:
+        """Run validation hooks on document."""
+        for hook in self.config.validation_hooks:
+            try:
+                async with timeout(self.config.operation_timeout):
+                    document = await hook(document)
+            except asyncio.TimeoutError:
+                return False, "Validation timeout"
+            except Exception as e:
+                return False, f"Validation failed: {str(e)}"
+        return True, None
+
+    async def _chunk_document(
+        self, document: Document
+    ) -> List[Tuple[str, ChunkMetadata]]:
+        """Split document into chunks with metadata."""
+        try:
+            async with timeout(self.config.operation_timeout):
+                chunks = await asyncio.to_thread(
+                    self._text_splitter.split_documents, [document]
+                )
+
+                return [
+                    (
+                        chunk.page_content,
+                        ChunkMetadata(
+                            id=str(uuid.uuid4()),
+                            start=chunk.metadata.get("start", 0),
+                            end=chunk.metadata.get("end", len(chunk.page_content)),
+                            page=chunk.metadata.get("page", 1),
+                            source=document.metadata.get("source", "unknown"),
+                        ),
+                    )
+                    for chunk in chunks
+                ]
+
+        except asyncio.TimeoutError:
+            raise TimeoutError("Document chunking timed out")
+        except Exception as e:
+            raise ChunkingError(f"Failed to chunk document: {e}")
+
+    def _compute_chunk_hash(self, chunk: str) -> str:
+        """Compute hash for chunk deduplication."""
+        return hashlib.blake2b(chunk.encode(), digest_size=16).hexdigest()
+
+    async def _deduplicate_chunk(
+        self, chunk: str, metadata: ChunkMetadata
+    ) -> Optional[Tuple[str, ChunkMetadata]]:
+        """Deduplicate chunk if enabled."""
+        if not self.config.enable_deduplication:
+            return (chunk, metadata)
+
+        chunk_hash = self._compute_chunk_hash(chunk)
+        if chunk_hash in self._chunk_hashes:
+            logger.debug("duplicate_chunk_found", hash=chunk_hash)
+            return None
+
+        self._chunk_hashes.add(chunk_hash)
+        return (chunk, metadata)
+
+    async def _extract_metadata(self, document: Document) -> DocumentMetadata:
+        """Extract metadata from document."""
+        try:
+            async with timeout(self.config.operation_timeout):
+                meta = document.metadata
+                return DocumentMetadata(
+                    id=str(uuid.uuid4()),
+                    title=meta.get("title", ""),
+                    author=meta.get("author", ""),
+                    date=meta.get("date", ""),
+                    source=meta.get("source", ""),
+                    pages=meta.get("pages", 0),
+                    language=meta.get("language", ""),
+                    file_type=meta.get("file_type", ""),
+                    creation_date=meta.get("creation_date", ""),
+                    modification_date=meta.get("modification_date", ""),
+                    size_bytes=meta.get("size_bytes", 0),
+                )
+        except asyncio.TimeoutError:
+            logger.warning("metadata_extraction_timeout")
+            return DocumentMetadata()
+        except Exception as e:
+            logger.warning(f"Failed to extract metadata: {e}")
+            return DocumentMetadata()
 
     async def process_documents(
         self, documents: List[Document]
@@ -361,154 +561,6 @@ class Processor:
                 document_id=document.metadata.get("source", "unknown"),
             )
             return None
-
-    async def _load_file(self, path: Path) -> List[Document]:
-        """Load single file with rate limiting."""
-        if path.suffix[1:] not in self.config.allowed_extensions:
-            raise InvalidSourceError(f"Unsupported file type: {path.suffix}")
-
-        try:
-            async with timeout(self.config.operation_timeout):
-                # Apply rate limiting
-                while not await self._rate_limiter.acquire():
-                    await asyncio.sleep(1)
-
-                loader = UnstructuredFileLoader(str(path) if isinstance(path, Path) else path.file)
-                document = await asyncio.to_thread(loader.load)
-                self.metrics.update_loaded_documents()
-                return document
-
-        except asyncio.TimeoutError:
-            raise TimeoutError(f"Loading file {path} timed out")
-        except Exception as e:
-            raise ProcessingError(f"Failed to load file {path}: {e}")
-
-    async def _load_directory(self, path: Path) -> List[Document]:
-        """Load directory of files with progress bar."""
-        try:
-            async with timeout(self.config.operation_timeout):
-                loader = DirectoryLoader(
-                    str(path),
-                    glob="**/*",
-                    loader_cls=UnstructuredFileLoader,
-                    use_multithreading=True, 
-                    silent_errors=True,
-                    show_progress=True,
-                )
-                documents = await asyncio.to_thread(loader.load)
-                self.metrics.update_loaded_documents(len(documents))
-                return documents
-
-        except asyncio.TimeoutError:
-            raise TimeoutError(f"Loading directory {path} timed out")
-        except Exception as e:
-            raise ProcessingError(f"Failed to load directory {path}: {e}")
-
-    async def _load_multiple_sources(
-        self, sources: List[Union[str, Path]]
-    ) -> List[Document]:
-        """Load multiple sources concurrently."""
-        documents = []
-        async with asyncio.TaskGroup() as group:
-            tasks = [
-                group.create_task(self.load_documents(source)) 
-                for source in sources
-            ]
-
-        for task in tasks:
-            try:
-                docs = await task
-                documents.extend(docs)
-            except* Exception as e:
-                self.metrics.add_error(str(e))
-        
-        self.metrics.update_loaded_documents(len(documents))
-        return documents
-
-    async def _validate_document(self, document: Document) -> Tuple[bool, Optional[str]]:
-        """Run validation hooks on document."""
-        for hook in self.config.validation_hooks:
-            try:
-                async with timeout(self.config.operation_timeout):
-                    document = await hook(document)
-            except asyncio.TimeoutError:
-                return False, "Validation timeout"
-            except Exception as e:
-                return False, f"Validation failed: {str(e)}"
-        return True, None
-
-    async def _chunk_document(
-        self, document: Document
-    ) -> List[Tuple[str, ChunkMetadata]]:
-        """Split document into chunks with metadata."""
-        try:
-            async with timeout(self.config.operation_timeout):
-                chunks = await asyncio.to_thread(
-                    self._text_splitter.split_documents, [document]
-                )
-
-                return [
-                    (
-                        chunk.page_content,
-                        ChunkMetadata(
-                            id=str(uuid.uuid4()),
-                            start=chunk.metadata.get("start", 0),
-                            end=chunk.metadata.get("end", len(chunk.page_content)),
-                            page=chunk.metadata.get("page", 1),
-                            source=document.metadata.get("source", "unknown"),
-                        ),
-                    )
-                    for chunk in chunks
-                ]
-
-        except asyncio.TimeoutError:
-            raise TimeoutError("Document chunking timed out")
-        except Exception as e:
-            raise ChunkingError(f"Failed to chunk document: {e}")
-
-    def _compute_chunk_hash(self, chunk: str) -> str:
-        """Compute hash for chunk deduplication."""
-        return hashlib.blake2b(chunk.encode(), digest_size=16).hexdigest()
-
-    async def _deduplicate_chunk(
-        self, chunk: str, metadata: ChunkMetadata
-    ) -> Optional[Tuple[str, ChunkMetadata]]:
-        """Deduplicate chunk if enabled."""
-        if not self.config.enable_deduplication:
-            return (chunk, metadata)
-
-        chunk_hash = self._compute_chunk_hash(chunk)
-        if chunk_hash in self._chunk_hashes:
-            logger.debug("duplicate_chunk_found", hash=chunk_hash)
-            return None
-
-        self._chunk_hashes.add(chunk_hash)
-        return (chunk, metadata)
-
-    async def _extract_metadata(self, document: Document) -> DocumentMetadata:
-        """Extract metadata from document."""
-        try:
-            async with timeout(self.config.operation_timeout):
-                meta = document.metadata
-                return DocumentMetadata(
-                    id=str(uuid.uuid4()),
-                    title=meta.get("title", ""),
-                    author=meta.get("author", ""),
-                    date=meta.get("date", ""),
-                    source=meta.get("source", ""),
-                    pages=meta.get("pages", 0),
-                    language=meta.get("language", ""),
-                    file_type=meta.get("file_type", ""),
-                    creation_date=meta.get("creation_date", ""),
-                    modification_date=meta.get("modification_date", ""),
-                    size_bytes=meta.get("size_bytes", 0),
-                )
-        except asyncio.TimeoutError:
-            logger.warning("metadata_extraction_timeout")
-            return DocumentMetadata()
-        except Exception as e:
-            logger.warning(f"Failed to extract metadata: {e}")
-            return DocumentMetadata()
 
     def cancel_processing(self) -> None:
         """Cancel ongoing processing."""
