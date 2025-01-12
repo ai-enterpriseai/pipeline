@@ -3,6 +3,7 @@ import torch
 
 from typing import List, Optional, Any, Union
 from pathlib import Path
+from enum import Enum
 from pydantic import BaseModel, Field, ValidationInfo, ConfigDict, field_validator
 
 from .logging import setup_logger
@@ -62,18 +63,26 @@ class ProcessorConfig(BaseModel):
             raise ValueError("rate_limit must be positive")
         return v
 
+class EmbedderType(Enum):
+    SENTENCE_TRANSFORMER = "sentence_transformer"
+    OPENAI = "openai"
+
 class EmbedderConfig(BaseModel):
     """Configuration for embeddings."""
     
     model_config = ConfigDict(arbitrary_types_allowed=True)
     
     # Dense embedding configuration
+    embedder_type: EmbedderType = Field(
+        default=EmbedderType.SENTENCE_TRANSFORMER,
+        description="Type of embedder to use"
+    )
     dense_model_name: str = Field(
-        default="all-MiniLM-L6-v2",
+        default="all-mpnet-base-v2",
         description="Name of the sentence-transformers model to use"
     )
     dense_model_dimension: int = Field(
-        default=384,
+        default=768,
         description="Dimension of the dense model embeddings"
     )
     device: str = Field(
@@ -194,7 +203,7 @@ class IndexerConfig(BaseModel):
     
     # Vector dimensions
     dense_dim: int = Field(
-        default=384,  # Default for all-MiniLM-L6-v2
+        default=768,  # Default for all-mpnet-base-v2
         description="Dimension of dense vectors"
     )
     
@@ -228,6 +237,56 @@ class CacheConfig(BaseModel):
         description="Time to live in seconds"
     )
 
+class RerankerType(Enum):
+    RERANKER = "cross_encoder"
+    COHERE = "cohere" 
+    
+    # Allow any string value while still maintaining enum for documentation
+    @classmethod
+    def _missing_(cls, value: str) -> str:
+        return value
+
+    @property
+    def default_model(self) -> str:
+        defaults = {
+            RerankerType.RERANKER: "cross-encoder/ms-marco-MiniLM-L-6-v2",
+            RerankerType.COHERE: "rerank-multilingual-v3.0",
+        }
+        return defaults.get(str(self), "")
+
+class RerankerConfig(BaseModel):
+    """Configuration for reranking."""
+    
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
+    reranker_type: RerankerType = Field(
+        default=RerankerType.RERANKER,
+        description="Type of reranker to use (cross_encoder/cohere)"
+    )
+    model_name: str = Field(
+        default=None,
+        description="Model name or path"
+    )    
+    top_k: int = Field(
+        default=5,
+        description="Number of documents to return after reranking"
+    )
+    batch_size: int = Field(
+        default=32,
+        description="Batch size for reranking"
+    )
+    api_key: Optional[str] = Field(
+        default=None,
+        description="API key for Cohere"
+    )
+
+    @field_validator('model_name')
+    def set_default_model(cls, v: Optional[str], info: ValidationInfo) -> str:
+        if v is None:
+            reranker_type = info.data.get('reranker_type', RerankerType.RERANKER)
+            return reranker_type.default_model
+        return v
+
 class RetrieverConfig(BaseModel):
     """Configuration for retrieval."""
     
@@ -240,15 +299,20 @@ class RetrieverConfig(BaseModel):
     )
     
     # Reranking parameters
-    reranker_model: str = Field(
-        default="cross-encoder/ms-marco-MiniLM-L-6-v2",
-        description="Model to use for reranking"
+    reranker: RerankerConfig = Field(
+        default_factory=RerankerConfig,
+        description="Reranker configuration"
     )
 
-    rerank_top_k: int = Field(
-        default=5,
-        description="Number of documents to return after reranking"
-    )
+    # reranker_model: str = Field(
+    #     default="cross-encoder/ms-marco-MiniLM-L-6-v2",
+    #     description="Model to use for reranking"
+    # )
+
+    # rerank_top_k: int = Field(
+    #     default=5,
+    #     description="Number of documents to return after reranking"
+    # )
     
     # Query processing
     query_max_length: int = Field(
