@@ -209,7 +209,7 @@ class Processor:
     ) -> List[Document]:
         """Load documents from various sources."""
         # Handle Streamlit UploadedFile
-        if hasattr(source, 'name'):  # Streamlit UploadedFile
+        if str(type(source).__name__) == "UploadedFile":
             try:
                 return await self._load_streamlit_file(source)
             except Exception as e:

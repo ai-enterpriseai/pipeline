@@ -3,8 +3,9 @@ import asyncio
 import torch
 import numpy as np
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from sentence_transformers import SentenceTransformer
+from openai import OpenAI
 from pinecone_text.sparse import BM25Encoder
 from tenacity import (
     retry,
@@ -12,7 +13,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from .utils.configs import EmbedderConfig
+from .utils.configs import EmbedderConfig, EmbedderType
 from .utils.logging import setup_logger
 
 logger = setup_logger(__name__)
@@ -61,9 +62,9 @@ class DenseEmbedder(BaseEmbedder):
         super().__init__(config)
         self.model = self._load_model()
         
-    def _load_model(self) -> SentenceTransformer:
+    def _load_model(self) -> Union[SentenceTransformer, Any]:
         """
-        Load the dense embedding model.
+        Load the embedding model based on configuration.
         
         Returns:
             Loaded model
@@ -72,16 +73,23 @@ class DenseEmbedder(BaseEmbedder):
             RuntimeError: If model loading fails
         """
         try:
-            logger.info(f"Loading dense model: {self.config.dense_model_name}")
-            model = SentenceTransformer(
-                self.config.dense_model_name,
-                device=self.config.device
-            )
-            model.max_seq_length = self.config.max_length
-            return model
+            if self.config.embedder_type == EmbedderType.SENTENCE_TRANSFORMER:
+                logger.info(f"Loading sentence transformer model: {self.config.dense_model_name}")
+                model = SentenceTransformer(
+                    self.config.dense_model_name,
+                    device=self.config.device
+                )
+                model.max_seq_length = self.config.max_length
+                return model
+            elif self.config.embedder_type == EmbedderType.OPENAI:
+                logger.info("Loading OpenAI embeddings client")
+                client = OpenAI()
+                return client.embeddings
+            else:
+                raise ValueError(f"Unsupported embedder type: {self.config.embedder_type}")
         except Exception as e:
-            logger.error(f"Failed to load dense model: {e}")
-            raise RuntimeError(f"Failed to load dense model: {e}")
+            logger.error(f"Failed to load model: {e}")
+            raise RuntimeError(f"Failed to load model: {e}")
 
     async def embed(self, texts: List[str]) -> torch.Tensor:
         """
@@ -97,21 +105,37 @@ class DenseEmbedder(BaseEmbedder):
             RuntimeError: If embedding generation fails
         """
         try:
-            # Use asyncio.to_thread for CPU-intensive operation
-            embeddings = await asyncio.to_thread(
-                self.model.encode,
-                texts,
-                batch_size=self.config.batch_size,
-                normalize_embeddings=self.config.normalize_embeddings,
-                show_progress_bar=True,
-                convert_to_tensor=True
-            )
-            logger.info("Dense embedding complete.")
-            return embeddings
+            if self.config.embedder_type == EmbedderType.SENTENCE_TRANSFORMER:
+                embeddings = await asyncio.to_thread(
+                    self.model.encode,
+                    texts,
+                    batch_size=self.config.batch_size,
+                    normalize_embeddings=self.config.normalize_embeddings,
+                    show_progress_bar=True
+                )
+                logger.info("Sentence transformer embedding complete")
+                return embeddings            
+            elif self.config.embedder_type == EmbedderType.OPENAI:
+                # Handle empty strings for OpenAI
+                processed_texts = [t if t else "SKIP" for t in texts]
+                all_embeddings = []
+                
+                # Process in batches
+                for i in range(0, len(processed_texts), self.config.batch_size):
+                    batch = processed_texts[i:i + self.config.batch_size]
+                    response = await asyncio.to_thread(
+                        self.model.create,
+                        input=batch,
+                        model=self.config.dense_model_name
+                    )
+                    batch_embeddings = [e.embedding for e in response.data]
+                    all_embeddings.extend(batch_embeddings)
+                    
+                logger.info("OpenAI embedding complete")
+                return all_embeddings        
         except Exception as e:
             logger.error(f"Dense embedding failed: {e}")
             raise RuntimeError(f"Dense embedding failed: {e}")
-
 
 class SparseEmbedder(BaseEmbedder):
     """Handles sparse embeddings using BM25Encoder from pinecone-text."""
