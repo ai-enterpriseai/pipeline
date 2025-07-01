@@ -18,6 +18,7 @@ class ProcessorConfig(BaseModel):
     chunk_size: int = Field(default=500, ge=100, le=2000)
     chunk_overlap: int = Field(default=100)
     max_threads: int = Field(default=4, ge=1)
+    max_concurrent_files: int = Field(default=10, ge=1, le=50)
     allowed_extensions: List[str] = Field(default_factory=lambda: ["pdf", "txt", "md", "doc", "docx"])
     extract_metadata: bool = Field(default=True)
     generate_chunk_context: bool = Field(default=False)

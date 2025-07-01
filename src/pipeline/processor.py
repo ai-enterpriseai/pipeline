@@ -2,6 +2,9 @@ import time
 import asyncio
 import hashlib
 import uuid
+import aiofiles
+import aiofiles.os
+from concurrent.futures import ThreadPoolExecutor
 
 from pathlib import Path
 from typing import (
@@ -301,25 +304,123 @@ class Processor:
                     logger.warning(f"Failed to delete temporary file: {e}")            
 
     async def _load_directory(self, path: Path) -> List[Document]:
-        """Load directory of files with progress bar."""
+        """Load directory of files asynchronously with concurrent processing."""
         try:
             async with timeout(self.config.operation_timeout):
-                loader = DirectoryLoader(
-                    str(path),
-                    glob="**/*",
-                    loader_cls=UnstructuredFileLoader,
-                    use_multithreading=True, 
-                    silent_errors=True,
-                    show_progress=True,
-                )
-                documents = await asyncio.to_thread(loader.load)
+                # Get all files asynchronously
+                file_paths = await self._get_files_async(path)
+                
+                if not file_paths:
+                    logger.warning(f"No supported files found in directory: {path}")
+                    return []
+                
+                logger.info(f"Found {len(file_paths)} files to process in {path}")
+                
+                # Load files concurrently using TaskGroup
+                documents = []
+                max_concurrent = min(self.config.max_concurrent_files, len(file_paths))
+                
+                # Process files in batches to control concurrency
+                for i in range(0, len(file_paths), max_concurrent):
+                    batch = file_paths[i:i + max_concurrent]
+                    
+                    async with asyncio.TaskGroup() as group:
+                        tasks = [
+                            group.create_task(self._load_file_async(file_path))
+                            for file_path in batch
+                        ]
+                    
+                    # Collect results from completed tasks
+                    for task in tasks:
+                        try:
+                            docs = await task
+                            if docs:  # docs could be None or empty list if file failed to load
+                                documents.extend(docs)
+                        except Exception as e:
+                            logger.warning(f"Failed to load file: {e}")
+                            self.metrics.add_error(str(e))
+                
                 self.metrics.update_loaded_documents(len(documents))
+                logger.info(f"Successfully loaded {len(documents)} documents from {len(file_paths)} files")
                 return documents
 
         except asyncio.TimeoutError:
             raise TimeoutError(f"Loading directory {path} timed out")
         except Exception as e:
             raise ProcessingError(f"Failed to load directory {path}: {e}")
+
+    async def _get_files_async(self, directory: Path) -> List[Path]:
+        """Asynchronously get all supported files from directory."""
+        files = []
+        try:
+            # Use asyncio for directory traversal
+            async for file_path in self._walk_directory_async(directory):
+                if file_path.is_file():
+                    # Check file extension
+                    extension = file_path.suffix[1:].lower()
+                    if extension in self.config.allowed_extensions:
+                        files.append(file_path)
+                    else:
+                        logger.debug(f"Skipping unsupported file: {file_path}")
+        except Exception as e:
+            logger.error(f"Error walking directory {directory}: {e}")
+            raise ProcessingError(f"Failed to scan directory: {e}")
+        
+        return files
+
+    async def _walk_directory_async(self, directory: Path):
+        """Asynchronously walk through directory tree."""
+        try:
+            # Get directory contents asynchronously
+            entries = await aiofiles.os.listdir(directory)
+            
+            for entry_name in entries:
+                entry_path = directory / entry_name
+                
+                # Check if it's a file or directory asynchronously
+                try:
+                    stat_result = await aiofiles.os.stat(entry_path)
+                    if stat_result.st_mode & 0o170000 == 0o040000:  # S_IFDIR
+                        # It's a directory, recurse
+                        async for sub_path in self._walk_directory_async(entry_path):
+                            yield sub_path
+                    else:
+                        # It's a file
+                        yield entry_path
+                except (OSError, PermissionError) as e:
+                    logger.warning(f"Cannot access {entry_path}: {e}")
+                    continue
+                        
+        except (OSError, PermissionError) as e:
+            logger.warning(f"Cannot read directory {directory}: {e}")
+            return
+
+    async def _load_file_async(self, path: Path) -> Optional[List[Document]]:
+        """Load a single file asynchronously with proper error handling."""
+        try:
+            # Apply rate limiting
+            while not await self._rate_limiter.acquire():
+                await asyncio.sleep(0.1)  # Shorter sleep for better concurrency
+            
+            # Load the file using UnstructuredFileLoader in thread pool
+            loader = UnstructuredFileLoader(str(path))
+            
+            # Use a dedicated thread pool for CPU-bound operations
+            loop = asyncio.get_event_loop()
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                documents = await loop.run_in_executor(executor, loader.load)
+            
+            if documents:
+                logger.debug(f"Successfully loaded {len(documents)} documents from {path}")
+                return documents
+            else:
+                logger.warning(f"No content extracted from {path}")
+                return []
+                
+        except Exception as e:
+            logger.warning(f"Failed to load file {path}: {e}")
+            self.metrics.add_error(f"File load error for {path}: {str(e)}")
+            return None
 
     async def _load_multiple_sources(
         self, sources: List[Union[str, Path]]
