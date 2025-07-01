@@ -2,10 +2,22 @@ import asyncio
 import time
 from pathlib import Path
 
-from src.pipeline.processor import Processor
-from src.pipeline.embedder import Embedder
-from src.pipeline.indexer import Indexer
-from src.pipeline.utils.configs import ProcessorConfig, EmbedderConfig, IndexerConfig
+try:
+    from src.pipeline.processor import Processor
+    from src.pipeline.embedder import Embedder
+    from src.pipeline.indexer import Indexer
+    from src.pipeline.utils.configs import (
+        ProcessorConfig,
+        EmbedderConfig,
+        IndexerConfig,
+    )
+except ModuleNotFoundError as exc:
+    missing = str(exc).split("No module named")[-1].strip().strip("'")
+    print(
+        f"Missing dependency: {missing}. Install requirements with 'pip install -r requirements.txt' "
+        "and ensure all optional packages are available."
+    )
+    raise SystemExit(1) from exc
 
 async def create_dummy_files(path: Path, count: int = 300) -> None:
     path.mkdir(parents=True, exist_ok=True)

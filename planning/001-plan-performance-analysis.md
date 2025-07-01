@@ -66,3 +66,8 @@ An initial run of `scripts/perf_profile.py` failed because required
 dependencies such as `langchain_community` and `unstructured` are not
 installed in the current environment. Profiling cannot proceed until these
 packages are available.
+
+Attempts to install the missing packages via `pip install -r requirements.txt`
+failed because the environment does not allow outbound network access. Profiling
+will remain blocked until the necessary dependencies are installed manually or a
+prebuilt environment is provided.
