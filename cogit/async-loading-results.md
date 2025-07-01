@@ -14,21 +14,28 @@ Successfully replaced the sequential `DirectoryLoader` with a custom async imple
 
 ## Performance Results
 
-### Benchmark Test Results (100 files)
+### Benchmark Test Results 
 
+#### Test 1: Async Implementation (100 files)
 | Configuration | Time (s) | Rate (docs/sec) | Improvement vs Sequential |
 |---------------|----------|-----------------|---------------------------|
-| **Sequential (1 concurrent)** | 1.60s | 62.5 | Baseline |
-| **Async (5 concurrent)** | 0.32s | 314.6 | **+80.1%** |
-| **Async (10 concurrent)** | 0.32s | 313.2 | **+80.0%** |
-| **Async (20 concurrent)** | 0.32s | 313.8 | **+80.1%** |
+| **Sequential (1 concurrent)** | 1.81s | 55.3 | Baseline |
+| **Async (5 concurrent)** | 0.32s | 314.6 | **+82.4%** |
+| **Async (10 concurrent)** | 0.36s | 277.3 | **+80.1%** |
+| **Async (20 concurrent)** | 0.36s | 274.6 | **+79.9%** |
+
+#### Test 2: DirectoryLoader vs Async (50 files)
+| Method | Time (s) | Rate (docs/sec) | Notes |
+|--------|----------|-----------------|-------|
+| **Original DirectoryLoader** | 1.94s | 25.8 | Baseline (blocking) |
+| **Async Implementation** | 0.58s | 86.0 | **3.3x speedup** |
 
 ### Key Improvements
 
-✅ **5x Performance Gain**: Loading time reduced from 1.60s to 0.32s  
-✅ **5x Throughput Increase**: Rate improved from 62.5 to ~314 docs/sec  
-✅ **Optimal Concurrency**: Best performance achieved with 5-10 concurrent files  
-✅ **Diminishing Returns**: No significant benefit beyond 10 concurrent files  
+✅ **Real Performance Gain**: 70-82% improvement in loading time  
+✅ **3-5x Throughput Increase**: Significant rate improvements across test scenarios  
+✅ **Optimal Concurrency**: Best performance achieved with 5 concurrent files  
+✅ **Diminishing Returns**: Minimal benefit beyond 10 concurrent files  
 
 ## Technical Implementation
 
@@ -56,18 +63,19 @@ Successfully replaced the sequential `DirectoryLoader` with a custom async imple
 ## Impact on Overall Pipeline
 
 ### Before Implementation
-- **Loading Stage**: 3.32s (13.2% of total time)
-- **Rate**: 85.8 docs/sec
+- **Loading Stage**: 3.32s (13.2% of total time, 300 files)
+- **Rate**: ~90 docs/sec (300 files / 3.32s)
 
-### After Implementation (Projected)
-- **Loading Stage**: ~0.66s (estimated for 300 files)
-- **Rate**: ~454 docs/sec
-- **Time Savings**: ~2.66s per 300 files
+### After Implementation (Realistic Projection)
+Based on 3.3x speedup from baseline tests:
+- **Loading Stage**: ~1.0s (estimated for 300 files)
+- **Rate**: ~300 docs/sec (3.3x improvement)
+- **Time Savings**: ~2.3s per 300 files
 
 ### Pipeline Performance Impact
 - **Previous Total**: 25.17s for 300 files
-- **New Projected Total**: ~22.5s for 300 files  
-- **Overall Improvement**: ~10.6% faster end-to-end
+- **New Projected Total**: ~23.0s for 300 files  
+- **Overall Improvement**: ~8.6% faster end-to-end
 
 ## Code Quality & Robustness
 
